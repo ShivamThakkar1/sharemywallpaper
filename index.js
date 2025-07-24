@@ -71,20 +71,26 @@ function sendChannelJoinMessage(chatId) {
 bot.start(async (ctx) => {
   if (await isBanned(ctx.from.id)) return;
 
-  return ctx.reply(`👋 Welcome to ShareMyWallpaperBot!
+  return ctx.reply(`👋 Welcome to *ShareMyWallpaperBot*!
 
-📤 You can send 1 or more wallpapers directly here.
-🖼️ Each will be shared anonymously to our channel: @ShareMyWallpaper
+📤 You can send one or more wallpapers directly here.
+🖼️ All submissions are shared anonymously to our channel: @ShareMyWallpaper
 
-🚫 Please avoid low-quality, offensive, or non-wallpaper images.
-❌ Promotions are not allowed. Violations will result in a ban.`);
+📌 *Rules & Guidelines*:
+• Only high-quality wallpapers (aesthetic, minimal, creative, etc.)
+• No promotions, advertisements, or unrelated content
+• Please *avoid religious content* (quotes, images, or messages) — this helps us keep the focus entirely on wallpapers for a broad audience
+• Repeated violations may lead to a ban
+
+✅ If you're ready, simply send your wallpapers now!`, {
+    parse_mode: "Markdown",
+  });
 });
 
-// Main handler for image submissions
+// Main handler for image submissions and rejections
 bot.on("message", async (ctx) => {
   const msg = ctx.message;
   const userId = msg.from.id;
-  const username = msg.from.username || "N/A";
 
   if (await isBanned(userId)) return;
 
@@ -94,7 +100,31 @@ bot.on("message", async (ctx) => {
     return sendChannelJoinMessage(ctx.chat.id);
   }
 
-  await handleSubmission(ctx, msg);
+  // Accept only photo or media group
+  if (msg.photo || msg.media_group_id) {
+    return await handleSubmission(ctx, msg);
+  }
+
+  // Reject unsupported content types
+  if (
+    msg.video ||
+    msg.document ||
+    msg.voice ||
+    msg.audio ||
+    msg.sticker
+  ) {
+    return ctx.reply(
+      `❌ Sorry, only *photo wallpapers* are accepted.\n\n` +
+      `Please avoid videos, documents, stickers, voice notes, or unsupported formats.`,
+      { parse_mode: "Markdown" }
+    );
+  }
+
+  // Catch-all rejection for any other unknown types
+  return ctx.reply(
+    `❌ Unsupported format detected. Please only send image wallpapers.`,
+    { parse_mode: "Markdown" }
+  );
 });
 
 // Handle "✅ I've Joined" button
@@ -112,7 +142,13 @@ bot.action("check_join", async (ctx) => {
   }
 
   const fakeCtx = Object.assign({}, ctx, { message: msg });
-  await handleSubmission(fakeCtx, msg);
+
+  if (msg.photo || msg.media_group_id) {
+    await handleSubmission(fakeCtx, msg);
+  } else {
+    await ctx.telegram.sendMessage(userId, `❌ Only photo wallpapers are accepted. Please send a valid wallpaper image.`);
+  }
+
   pendingSubmissions.delete(userId);
 
   return ctx.answerCbQuery("✅ Thanks! Your wallpapers have been submitted.");
