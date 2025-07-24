@@ -11,7 +11,7 @@ mongoose.connect(process.env.MONGO_URI, {
   useUnifiedTopology: true,
 });
 
-// MongoDB models
+// Models
 const Submission = mongoose.model("Submission", {
   userId: Number,
   username: String,
@@ -28,7 +28,46 @@ const isBanned = async (id) => {
   return !!user;
 };
 
-// /start handler
+// Check if user has joined the channel
+const hasJoinedChannel = async (userId) => {
+  try {
+    const member = await bot.telegram.getChatMember(process.env.CHANNEL_ID, userId);
+    return ["member", "creator", "administrator"].includes(member.status);
+  } catch (e) {
+    console.error("❌ Error checking membership:", e.message);
+    return false;
+  }
+};
+
+// Store pending messages
+const pendingSubmissions = new Map();
+const mediaGroups = {};
+
+// Helper: Send Join Prompt with Buttons
+function sendChannelJoinMessage(chatId) {
+  const keyboard = {
+    inline_keyboard: [
+      [
+        { text: "📲 Join Channel", url: "https://t.me/ShareMyWallpaper" },
+        { text: "✅ I've Joined", callback_data: "check_join" }
+      ]
+    ]
+  };
+
+  bot.telegram.sendMessage(
+    chatId,
+    `🔒 To submit wallpapers, please join our community channel first!\n\n` +
+    `📢 Channel: @ShareMyWallpaper\n\n` +
+    `Once you've joined, click *I've Joined* to continue.`,
+    {
+      reply_markup: keyboard,
+      parse_mode: "Markdown",
+      disable_web_page_preview: true
+    }
+  );
+}
+
+// Start command
 bot.start(async (ctx) => {
   if (await isBanned(ctx.from.id)) return;
 
@@ -41,9 +80,7 @@ bot.start(async (ctx) => {
 ❌ Promotions are not allowed. Violations will result in a ban.`);
 });
 
-// Media group handler
-const mediaGroups = {};
-
+// Main handler for image submissions
 bot.on("message", async (ctx) => {
   const msg = ctx.message;
   const userId = msg.from.id;
@@ -51,7 +88,42 @@ bot.on("message", async (ctx) => {
 
   if (await isBanned(userId)) return;
 
-  // Handle media group (album)
+  const joined = await hasJoinedChannel(userId);
+  if (!joined) {
+    pendingSubmissions.set(userId, msg);
+    return sendChannelJoinMessage(ctx.chat.id);
+  }
+
+  await handleSubmission(ctx, msg);
+});
+
+// Handle "✅ I've Joined" button
+bot.action("check_join", async (ctx) => {
+  const userId = ctx.from.id;
+
+  const joined = await hasJoinedChannel(userId);
+  if (!joined) {
+    return ctx.answerCbQuery("❌ You haven't joined yet!", { show_alert: true });
+  }
+
+  const msg = pendingSubmissions.get(userId);
+  if (!msg) {
+    return ctx.answerCbQuery("✅ Already checked or expired.");
+  }
+
+  const fakeCtx = Object.assign({}, ctx, { message: msg });
+  await handleSubmission(fakeCtx, msg);
+  pendingSubmissions.delete(userId);
+
+  return ctx.answerCbQuery("✅ Thanks! Your wallpapers have been submitted.");
+});
+
+// Process photo submissions
+async function handleSubmission(ctx, msg) {
+  const userId = msg.from.id;
+  const username = msg.from.username || "N/A";
+
+  // Album
   if (msg.media_group_id) {
     const groupId = msg.media_group_id;
 
@@ -67,17 +139,16 @@ bot.on("message", async (ctx) => {
       });
     }
 
-    // Only set timeout once to send the full group
     if (!mediaGroups[groupId].timeout) {
       mediaGroups[groupId].timeout = setTimeout(async () => {
         const group = mediaGroups[groupId];
         const items = group.items;
 
         if (items.length > 0) {
-          try {
-            items[0].caption =
-              "🖼️ Shared by the community\n#wallpapers #aesthetic #minimal #sharemywallpaper";
+          items[0].caption =
+            "🖼️ Shared by the community\n#wallpapers #aesthetic #minimal #sharemywallpaper";
 
+          try {
             await ctx.telegram.sendMediaGroup(process.env.CHANNEL_ID, items);
 
             await Submission.findOneAndUpdate(
@@ -91,11 +162,11 @@ bot.on("message", async (ctx) => {
         }
 
         delete mediaGroups[groupId];
-      }, 1500); // wait to collect all items
+      }, 1500);
     }
   }
 
-  // Handle single photo
+  // Single photo
   else if (msg.photo) {
     const photo = msg.photo[msg.photo.length - 1];
 
@@ -114,9 +185,9 @@ bot.on("message", async (ctx) => {
       console.error("❌ Single photo send error:", err);
     }
   }
-});
+}
 
-// /ban command
+// /ban <user_id>
 bot.command("ban", async (ctx) => {
   if (ctx.from.id.toString() !== process.env.ADMIN_ID) return;
 
@@ -128,7 +199,7 @@ bot.command("ban", async (ctx) => {
   ctx.reply(`🚫 User ${userId} has been banned.`);
 });
 
-// /unban command
+// /unban <user_id>
 bot.command("unban", async (ctx) => {
   if (ctx.from.id.toString() !== process.env.ADMIN_ID) return;
 
@@ -150,7 +221,7 @@ bot.launch().then(() => {
   console.log("🤖 Bot is running");
 });
 
-// Dummy HTTP server for Render
+// Dummy HTTP server for Render (keeps it alive)
 const app = express();
 const PORT = process.env.PORT || 3000;
 
