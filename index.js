@@ -3,15 +3,15 @@ const { Telegraf } = require("telegraf");
 const mongoose = require("mongoose");
 const express = require("express");
 
-// === Init Bot ===
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
-// === MongoDB Setup ===
+// MongoDB connection
 mongoose.connect(process.env.MONGO_URI, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
 });
 
+// MongoDB models
 const Submission = mongoose.model("Submission", {
   userId: Number,
   username: String,
@@ -28,7 +28,7 @@ const isBanned = async (id) => {
   return !!user;
 };
 
-// === /start Handler ===
+// /start handler
 bot.start(async (ctx) => {
   if (await isBanned(ctx.from.id)) return;
 
@@ -41,45 +41,78 @@ bot.start(async (ctx) => {
 ❌ Promotions are not allowed. Violations will result in a ban.`);
 });
 
-// === Photo Handler (supports single or multiple images) ===
+// Media group handling
+const mediaGroups = {};
+
 bot.on("message", async (ctx) => {
-  const userId = ctx.from.id;
-  const username = ctx.from.username || "N/A";
+  const msg = ctx.message;
+  const userId = msg.from.id;
+  const username = msg.from.username || "N/A";
 
   if (await isBanned(userId)) return;
 
-  const message = ctx.message;
+  // Handle media group (albums)
+  if (msg.media_group_id) {
+    const groupId = msg.media_group_id;
 
-  if (!message.photo && !message.media_group_id) return;
-
-  try {
-    // Multiple photos (album)
-    if (message.media_group_id) {
-      // Do nothing here – Telegram sends each image individually
-      return;
+    if (!mediaGroups[groupId]) {
+      mediaGroups[groupId] = [];
     }
 
-    // Single photo
-    const photos = message.photo;
-    if (!photos) return;
+    const photo = msg.photo?.[msg.photo.length - 1];
+    if (photo) {
+      mediaGroups[groupId].push({
+        type: "photo",
+        media: photo.file_id,
+      });
+    }
 
-    const largest = photos[photos.length - 1];
+    // Delay sending to wait for all images in group
+    setTimeout(async () => {
+      const items = mediaGroups[groupId];
+      if (items && items.length > 0) {
+        try {
+          items[0].caption =
+            "🖼️ Shared by the community\n#wallpapers #aesthetic #minimal #sharemywallpaper";
 
-    await ctx.telegram.sendPhoto(process.env.CHANNEL_ID, largest.file_id, {
-      caption: "🖼️ Shared by the community\n#wallpapers #aesthetic #minimal #sharemywallpaper",
-    });
+          await ctx.telegram.sendMediaGroup(process.env.CHANNEL_ID, items);
 
-    await Submission.findOneAndUpdate(
-      { userId },
-      { $inc: { count: 1 }, username, date: new Date() },
-      { upsert: true }
-    );
-  } catch (err) {
-    console.error("Send Error:", err);
+          await Submission.findOneAndUpdate(
+            { userId },
+            { $inc: { count: items.length }, username, date: new Date() },
+            { upsert: true }
+          );
+        } catch (err) {
+          console.error("❌ Media group send error:", err);
+        }
+      }
+
+      delete mediaGroups[groupId];
+    }, 1500);
+  }
+
+  // Handle single photo
+  else if (msg.photo) {
+    const photo = msg.photo[msg.photo.length - 1];
+
+    try {
+      await ctx.telegram.sendPhoto(process.env.CHANNEL_ID, photo.file_id, {
+        caption:
+          "🖼️ Shared by the community\n#wallpapers #aesthetic #minimal #sharemywallpaper",
+      });
+
+      await Submission.findOneAndUpdate(
+        { userId },
+        { $inc: { count: 1 }, username, date: new Date() },
+        { upsert: true }
+      );
+    } catch (err) {
+      console.error("❌ Single photo send error:", err);
+    }
   }
 });
 
-// === /ban Command (admin only) ===
+// /ban command (admin only)
 bot.command("ban", async (ctx) => {
   if (ctx.from.id.toString() !== process.env.ADMIN_ID) return;
 
@@ -91,7 +124,7 @@ bot.command("ban", async (ctx) => {
   ctx.reply(`🚫 User ${userId} has been banned.`);
 });
 
-// === /unban Command (admin only) ===
+// /unban command (admin only)
 bot.command("unban", async (ctx) => {
   if (ctx.from.id.toString() !== process.env.ADMIN_ID) return;
 
@@ -108,12 +141,12 @@ bot.command("unban", async (ctx) => {
   }
 });
 
-// === Launch Bot ===
+// Launch bot
 bot.launch().then(() => {
   console.log("🤖 Bot is running");
 });
 
-// === Dummy HTTP server for Render ===
+// Dummy HTTP server for Render Web Service
 const app = express();
 const PORT = process.env.PORT || 3000;
 
