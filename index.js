@@ -41,7 +41,7 @@ bot.start(async (ctx) => {
 ❌ Promotions are not allowed. Violations will result in a ban.`);
 });
 
-// Media group handling
+// Media group handler
 const mediaGroups = {};
 
 bot.on("message", async (ctx) => {
@@ -51,44 +51,48 @@ bot.on("message", async (ctx) => {
 
   if (await isBanned(userId)) return;
 
-  // Handle media group (albums)
+  // Handle media group (album)
   if (msg.media_group_id) {
     const groupId = msg.media_group_id;
 
     if (!mediaGroups[groupId]) {
-      mediaGroups[groupId] = [];
+      mediaGroups[groupId] = { items: [] };
     }
 
     const photo = msg.photo?.[msg.photo.length - 1];
     if (photo) {
-      mediaGroups[groupId].push({
+      mediaGroups[groupId].items.push({
         type: "photo",
         media: photo.file_id,
       });
     }
 
-    // Delay sending to wait for all images in group
-    setTimeout(async () => {
-      const items = mediaGroups[groupId];
-      if (items && items.length > 0) {
-        try {
-          items[0].caption =
-            "🖼️ Shared by the community\n#wallpapers #aesthetic #minimal #sharemywallpaper";
+    // Only set timeout once to send the full group
+    if (!mediaGroups[groupId].timeout) {
+      mediaGroups[groupId].timeout = setTimeout(async () => {
+        const group = mediaGroups[groupId];
+        const items = group.items;
 
-          await ctx.telegram.sendMediaGroup(process.env.CHANNEL_ID, items);
+        if (items.length > 0) {
+          try {
+            items[0].caption =
+              "🖼️ Shared by the community\n#wallpapers #aesthetic #minimal #sharemywallpaper";
 
-          await Submission.findOneAndUpdate(
-            { userId },
-            { $inc: { count: items.length }, username, date: new Date() },
-            { upsert: true }
-          );
-        } catch (err) {
-          console.error("❌ Media group send error:", err);
+            await ctx.telegram.sendMediaGroup(process.env.CHANNEL_ID, items);
+
+            await Submission.findOneAndUpdate(
+              { userId },
+              { $inc: { count: items.length }, username, date: new Date() },
+              { upsert: true }
+            );
+          } catch (err) {
+            console.error("❌ Media group send error:", err);
+          }
         }
-      }
 
-      delete mediaGroups[groupId];
-    }, 1500);
+        delete mediaGroups[groupId];
+      }, 1500); // wait to collect all items
+    }
   }
 
   // Handle single photo
@@ -112,7 +116,7 @@ bot.on("message", async (ctx) => {
   }
 });
 
-// /ban command (admin only)
+// /ban command
 bot.command("ban", async (ctx) => {
   if (ctx.from.id.toString() !== process.env.ADMIN_ID) return;
 
@@ -124,7 +128,7 @@ bot.command("ban", async (ctx) => {
   ctx.reply(`🚫 User ${userId} has been banned.`);
 });
 
-// /unban command (admin only)
+// /unban command
 bot.command("unban", async (ctx) => {
   if (ctx.from.id.toString() !== process.env.ADMIN_ID) return;
 
@@ -141,12 +145,12 @@ bot.command("unban", async (ctx) => {
   }
 });
 
-// Launch bot
+// Start bot
 bot.launch().then(() => {
   console.log("🤖 Bot is running");
 });
 
-// Dummy HTTP server for Render Web Service
+// Dummy HTTP server for Render
 const app = express();
 const PORT = process.env.PORT || 3000;
 
